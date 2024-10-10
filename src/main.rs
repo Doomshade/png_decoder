@@ -6,7 +6,7 @@ const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
 #[derive(Debug)]
 enum ChunkType {
-    IHDR,
+    Ihdr,
     Invalid,
 }
 
@@ -26,11 +26,6 @@ impl Chunk {
         }
     }
 }
-const SENTINEL: Chunk = Chunk {
-    length: 0,
-    chunk_type: ChunkType::Invalid,
-    data: vec![],
-};
 
 impl From<[u8; 4]> for ChunkType {
     fn from(value: [u8; 4]) -> Self {
@@ -40,7 +35,7 @@ impl From<[u8; 4]> for ChunkType {
         };
 
         match s {
-            "IHDR" => ChunkType::IHDR,
+            "IHDR" => ChunkType::Ihdr,
             _ => ChunkType::Invalid,
         }
     }
@@ -112,6 +107,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     let mut png_iter = PngIterator::new(contents.into_iter());
     png_iter.validate_png_signature()?;
     let chunk = png_iter.parse_chunk()?;
-    dbg!(chunk);
+    dbg!(&chunk);
+    dbg!(&chunk.length);
+    dbg!(&chunk.chunk_type);
+    dbg!(&chunk.data);
     Ok(())
 }
