@@ -67,9 +67,7 @@ impl<I: Iterator<Item = u8>> PngIterator<I> {
     /// - CRC (4 bytes)
     fn parse_chunk(&mut self) -> io::Result<Chunk> {
         let length = u32::from_be_bytes(self.read_bytes()?);
-        dbg!(length);
         let chunk_type = ChunkType::from(self.read_bytes()?);
-        dbg!(&chunk_type);
         let mut chunk_data: Vec<u8> = Vec::with_capacity(length as usize);
 
         for _ in 0..length {
@@ -86,7 +84,9 @@ impl<I: Iterator<Item = u8>> PngIterator<I> {
 
     fn read_bytes<const N: usize>(&mut self) -> io::Result<[u8; N]> {
         let mut buf = [0; N];
-        dbg!(N);
+        if N == 0 {
+            return Ok(buf);
+        }
 
         for b in &mut buf {
             *b = self
@@ -94,7 +94,6 @@ impl<I: Iterator<Item = u8>> PngIterator<I> {
                 .next()
                 .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "Unexpected EOF"))?;
         }
-        dbg!(&buf);
 
         Ok(buf)
     }
@@ -106,10 +105,11 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     let contents = fs::read(file)?;
     let mut png_iter = PngIterator::new(contents.into_iter());
     png_iter.validate_png_signature()?;
-    let chunk = png_iter.parse_chunk()?;
-    dbg!(&chunk);
-    dbg!(&chunk.length);
-    dbg!(&chunk.chunk_type);
-    dbg!(&chunk.data);
-    Ok(())
+    loop {
+        let chunk = png_iter.parse_chunk()?;
+        dbg!(&chunk);
+        dbg!(&chunk.length);
+        dbg!(&chunk.chunk_type);
+        dbg!(&chunk.data);
+    }
 }
