@@ -263,7 +263,7 @@ impl TryFrom<Vec<u8>> for IhdrChunkData {
         let mut iter = value.iter();
 
         for i in 0..4 {
-            buf[i] = *iter.next().ok_or_else(|| "Expected 4 bytes for width")?;
+            buf[i] = *iter.next().ok_or("Expected 4 bytes for width")?;
         }
 
         let width = u32::from_be_bytes(buf);
@@ -271,15 +271,15 @@ impl TryFrom<Vec<u8>> for IhdrChunkData {
         buf = [0; 4];
 
         for i in 0..4 {
-            buf[i] = *iter.next().ok_or_else(|| "Expected 4 bytes for height")?;
+            buf[i] = *iter.next().ok_or("Expected 4 bytes for height")?;
         }
 
         let height = u32::from_be_bytes(buf);
 
-        let bit_depth = BitDepth::try_from(*iter.next().ok_or_else(|| "Expected bit depth byte")?)?;
+        let bit_depth = BitDepth::try_from(*iter.next().ok_or("Expected bit depth byte")?)?;
 
         let color_type =
-            ColorType::try_from(*iter.next().ok_or_else(|| "Expected color type byte")?)?;
+            ColorType::try_from(*iter.next().ok_or("Expected color type byte")?)?;
 
         if !color_type.combination_allowed(&bit_depth) {
             return Err(format!("The combination of bit depth {bit_depth} and color type {color_type} is not allowed"));
@@ -288,16 +288,16 @@ impl TryFrom<Vec<u8>> for IhdrChunkData {
         let compression_method = CompressionMethod::try_from(
             *iter
                 .next()
-                .ok_or_else(|| "Expected compression method byte")?,
+                .ok_or("Expected compression method byte")?,
         )?;
 
         let filter_method =
-            FilterMethod::try_from(*iter.next().ok_or_else(|| "Expected filter method byte")?)?;
+            FilterMethod::try_from(*iter.next().ok_or("Expected filter method byte")?)?;
 
         let interlace_method = InterlaceMethod::try_from(
             *iter
                 .next()
-                .ok_or_else(|| "Expected interlace method byte")?,
+                .ok_or("Expected interlace method byte")?,
         )?;
 
         Ok(Self {
@@ -368,12 +368,12 @@ impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
     fn validate_png_signature(&mut self) -> io::Result<()> {
         let png_signature = self.read_bytes::<PNG_SIGNATURE_LENGTH>()?;
         if png_signature == PNG_SIGNATURE {
-            return Ok(());
+            Ok(())
         } else {
-            return Err(io::Error::new(
+            Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Invalid PNG signature",
-            ));
+            ))
         }
     }
 
