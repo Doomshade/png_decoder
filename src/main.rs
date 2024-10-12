@@ -6,24 +6,6 @@ use std::io;
 const PNG_SIGNATURE_LENGTH: usize = 8;
 const PNG_SIGNATURE: [u8; PNG_SIGNATURE_LENGTH] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
-#[derive(Debug, PartialEq, Eq)]
-enum ChunkType {
-    Ihdr,
-    Idat,
-    Iend,
-}
-
-impl fmt::Display for ChunkType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ChunkType::Ihdr => write!(f, "IHDR")?,
-            ChunkType::Idat => write!(f, "IDAT")?,
-            ChunkType::Iend => write!(f, "IEND")?,
-        }
-        Ok(())
-    }
-}
-
 #[derive(Debug)]
 enum ChunkData {
     Ihdr(IhdrChunkData),
@@ -262,43 +244,36 @@ impl TryFrom<Vec<u8>> for IhdrChunkData {
         let mut buf = [0; 4];
         let mut iter = value.iter();
 
-        for i in 0..4 {
-            buf[i] = *iter.next().ok_or("Expected 4 bytes for width")?;
+        for b in &mut buf {
+            *b = *iter.next().ok_or("Expected 4 bytes for width")?;
         }
 
         let width = u32::from_be_bytes(buf);
 
         buf = [0; 4];
 
-        for i in 0..4 {
-            buf[i] = *iter.next().ok_or("Expected 4 bytes for height")?;
+        for b in &mut buf {
+            *b = *iter.next().ok_or("Expected 4 bytes for height")?;
         }
 
         let height = u32::from_be_bytes(buf);
 
         let bit_depth = BitDepth::try_from(*iter.next().ok_or("Expected bit depth byte")?)?;
 
-        let color_type =
-            ColorType::try_from(*iter.next().ok_or("Expected color type byte")?)?;
+        let color_type = ColorType::try_from(*iter.next().ok_or("Expected color type byte")?)?;
 
         if !color_type.combination_allowed(&bit_depth) {
             return Err(format!("The combination of bit depth {bit_depth} and color type {color_type} is not allowed"));
         }
 
-        let compression_method = CompressionMethod::try_from(
-            *iter
-                .next()
-                .ok_or("Expected compression method byte")?,
-        )?;
+        let compression_method =
+            CompressionMethod::try_from(*iter.next().ok_or("Expected compression method byte")?)?;
 
         let filter_method =
             FilterMethod::try_from(*iter.next().ok_or("Expected filter method byte")?)?;
 
-        let interlace_method = InterlaceMethod::try_from(
-            *iter
-                .next()
-                .ok_or("Expected interlace method byte")?,
-        )?;
+        let interlace_method =
+            InterlaceMethod::try_from(*iter.next().ok_or("Expected interlace method byte")?)?;
 
         Ok(Self {
             width,
@@ -337,21 +312,6 @@ impl Chunk {
             ChunkData::Ihdr(_) => "IHDR",
             ChunkData::Idat(_) => "IDAT",
             ChunkData::Iend => "IEND",
-            _ => "Unknown chunk type",
-        }
-    }
-}
-
-impl TryFrom<[u8; 4]> for ChunkType {
-    type Error = String;
-    fn try_from(value: [u8; 4]) -> Result<Self, Self::Error> {
-        let s = std::str::from_utf8(&value).map_err(|err| err.to_string())?;
-
-        match s {
-            "IHDR" => Ok(ChunkType::Ihdr),
-            "IDAT" => Ok(ChunkType::Idat),
-            "IEND" => Ok(ChunkType::Iend),
-            _ => Err(format!("Invalid chunk type: {s}")),
         }
     }
 }
@@ -384,8 +344,12 @@ impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
     /// - CRC (4 bytes)
     fn parse_chunk(&mut self) -> io::Result<Chunk> {
         let length = u32::from_be_bytes(self.read_bytes()?);
-        let chunk_type = ChunkType::try_from(self.read_bytes()?)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        let chunk_type = String::from_utf8(self.read_bytes::<4>()?.to_vec()).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Failed to parse chunk type: {e}"),
+            )
+        })?;
         let mut chunk_data_raw: Vec<u8> = Vec::with_capacity(length as usize);
 
         println!("Reading {length} bytes (chunk data)");
@@ -400,10 +364,10 @@ impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
         }
 
         let crc = self.read_bytes()?;
-        let chunk_data = match chunk_type {
-            ChunkType::Ihdr => ChunkData::Ihdr(IhdrChunkData::try_from(chunk_data_raw).unwrap()),
-            ChunkType::Idat => ChunkData::Idat(chunk_data_raw),
-            ChunkType::Iend => ChunkData::Iend,
+        let chunk_data = match chunk_type.as_str() {
+            "IHDR" => ChunkData::Ihdr(IhdrChunkData::try_from(chunk_data_raw).unwrap()),
+            "IDAT" => ChunkData::Idat(chunk_data_raw),
+            "IEND" => ChunkData::Iend,
             _ => todo!(),
         };
 
