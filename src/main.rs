@@ -289,7 +289,7 @@ impl TryFrom<Vec<u8>> for IhdrChunkData {
 
 impl fmt::Display for IhdrChunkData {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(
+        write!(
             f,
             "IHDR {{\n  Width: {},\n  Height: {},\n  Bit depth: {},\n  Color type: {},\n  Compression method: {},\n  Filter method: {},\n  Interlace method: {}\n}}",
             self.width, self.height, self.bit_depth, self.color_type, self.compression_method, self.filter_method, self.interlace_method
