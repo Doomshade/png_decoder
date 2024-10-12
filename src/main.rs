@@ -6,7 +6,7 @@ use std::io;
 const PNG_SIGNATURE_LENGTH: usize = 8;
 const PNG_SIGNATURE: [u8; PNG_SIGNATURE_LENGTH] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum ChunkData {
     Ihdr(IhdrChunkData),
     Idat(Vec<u8>),
@@ -227,7 +227,7 @@ impl fmt::Display for InterlaceMethod {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct IhdrChunkData {
     width: u32,
     height: u32,
@@ -287,9 +287,29 @@ impl TryFrom<Vec<u8>> for IhdrChunkData {
     }
 }
 
+impl fmt::Display for IhdrChunkData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "IHDR {{\n  Width: {},\n  Height: {},\n  Bit depth: {},\n  Color type: {},\n  Compression method: {},\n  Filter method: {},\n  Interlace method: {}\n}}",
+            self.width, self.height, self.bit_depth, self.color_type, self.compression_method, self.filter_method, self.interlace_method
+        )
+    }
+}
+
+impl fmt::Display for ChunkData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ChunkData::Ihdr(d) => d.fmt(f),
+            ChunkData::Idat(d) => write!(f, "{:?}", d),
+            ChunkData::Iend => write!(f, "<none>"),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Chunk {
-    length: usize,
+    pub length: usize,
     data: ChunkData,
     crc: [u8; 4],
 }
@@ -297,9 +317,6 @@ struct Chunk {
 impl Chunk {
     pub fn new(length: usize, data: ChunkData, crc: [u8; 4]) -> Self {
         Self { length, data, crc }
-    }
-    fn length(&self) -> usize {
-        self.length
     }
     fn crc(&self) -> &[u8; 4] {
         &self.crc
@@ -319,7 +336,7 @@ impl Chunk {
 impl fmt::Display for Chunk {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Length: {}", self.length)?;
-        writeln!(f, "Data: {:?}", self.data)?;
+        writeln!(f, "Data: {}", self.data)?;
         write!(f, "CRC: {:?}", self.crc)
     }
 }
@@ -436,7 +453,7 @@ fn parse_png<'a>(file_path: &'a str) -> Result<PngFile<'a>, Box<dyn std::error::
     loop {
         let chunk = png_iter.parse_chunk()?;
         println!("Chunk type: {}", chunk.chunk_type());
-        if chunk.chunk_type() == "IEND" {
+        if chunk.data() == &ChunkData::Iend {
             chunks.push(chunk);
             println!("Read all chunks");
             return Ok(PngFile {
