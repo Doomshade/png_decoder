@@ -316,6 +316,14 @@ impl Chunk {
     }
 }
 
+impl fmt::Display for Chunk {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Length: {}", self.length)?;
+        writeln!(f, "Data: {:?}", self.data)?;
+        write!(f, "CRC: {:?}", self.crc)
+    }
+}
+
 struct PngIterator<I: ExactSizeIterator<Item = u8>> {
     inner: I,
 }
@@ -402,11 +410,24 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
 }
 
 #[derive(Debug)]
-struct PngFile {
+struct PngFile<'a> {
+    name: &'a str,
     chunks: Vec<Chunk>,
 }
 
-fn parse_png(file_path: &str) -> Result<PngFile, Box<dyn std::error::Error + 'static>> {
+impl fmt::Display for PngFile<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Name: {}", self.name)?;
+        writeln!(f, "Chunk #: {}\n", self.chunks.len())?;
+        self.chunks
+            .iter()
+            .enumerate()
+            .for_each(|(idx, chunk)| writeln!(f, "==Chunk {idx}==\n{chunk}\n").unwrap());
+        Ok(())
+    }
+}
+
+fn parse_png<'a>(file_path: &'a str) -> Result<PngFile<'a>, Box<dyn std::error::Error + 'static>> {
     let mut chunks = vec![];
     let contents = fs::read(file_path)?;
     let mut png_iter = PngIterator::new(contents.into_iter());
@@ -418,7 +439,10 @@ fn parse_png(file_path: &str) -> Result<PngFile, Box<dyn std::error::Error + 'st
         if chunk.chunk_type() == "IEND" {
             chunks.push(chunk);
             println!("Read all chunks");
-            return Ok(PngFile { chunks });
+            return Ok(PngFile {
+                name: file_path,
+                chunks,
+            });
         }
         chunks.push(chunk);
     }
@@ -429,12 +453,12 @@ fn test_valid_pngs() -> Result<(), Box<dyn std::error::Error + 'static>> {
     let png_dir = fs::read_dir("resources/pngs/valid")?;
 
     for png in png_dir {
-        let p = parse_png(
-            png?.path()
-                .to_str()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Path not found"))?,
-        )?;
-        dbg!(p);
+        let path = png?.path();
+        let path_str = path
+            .to_str()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Path not found"))?;
+        let p = parse_png(path_str)?;
+        println!("{p}");
     }
     Ok(())
 }
