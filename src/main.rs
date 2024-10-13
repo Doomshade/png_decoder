@@ -2,7 +2,7 @@ use std::env;
 use std::fmt;
 use std::fs;
 use std::io;
-
+use std::usize;
 const PNG_SIGNATURE_LENGTH: usize = 8;
 const PNG_SIGNATURE: [u8; PNG_SIGNATURE_LENGTH] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
@@ -448,11 +448,23 @@ impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
+#[show_image::main]
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     let file = args.get(1).expect("Please provide a path to the PNG file");
     let png_file = parse_png(file)?;
 
+    let ihdr = png_file.ihdr();
+
+    let width = ihdr.width();
+    let height = ihdr.height();
+
+    let image_data = vec![0; width as usize * height as usize];
+    let image = show_image::ImageView::new(show_image::ImageInfo::rgb8(width, height), &image_data);
+
+    println!("Showing image");
+    let window = show_image::create_window("image", Default::default())?;
+    window.set_image(file, image)?;
     Ok(())
 }
 
