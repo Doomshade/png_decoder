@@ -459,12 +459,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let width = ihdr.width();
     let height = ihdr.height();
 
-    let image_data = vec![0; width as usize * height as usize];
+    let image_data = vec![255; width as usize * height as usize];
     let image = show_image::ImageView::new(show_image::ImageInfo::rgb8(width, height), &image_data);
 
     println!("Showing image");
     let window = show_image::create_window("image", Default::default())?;
     window.set_image(file, image)?;
+
+    for event in window.event_channel()? {
+        if let show_image::event::WindowEvent::KeyboardInput(event) = event {
+            println!("{:#?}", event);
+            if event.input.key_code == Some(show_image::event::VirtualKeyCode::Escape)
+                && event.input.state.is_pressed()
+            {
+                break;
+            }
+        }
+    }
+
     Ok(())
 }
 
