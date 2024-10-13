@@ -238,6 +238,36 @@ struct IhdrChunkData {
     interlace_method: InterlaceMethod,
 }
 
+impl IhdrChunkData {
+    pub fn new(
+        width: u32,
+        height: u32,
+        bit_depth: BitDepth,
+        color_type: ColorType,
+        compression_method: CompressionMethod,
+        filter_method: FilterMethod,
+        interlace_method: InterlaceMethod,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            bit_depth,
+            color_type,
+            compression_method,
+            filter_method,
+            interlace_method,
+        }
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+}
+
 impl TryFrom<Vec<u8>> for IhdrChunkData {
     type Error = String;
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
@@ -289,7 +319,7 @@ impl TryFrom<Vec<u8>> for IhdrChunkData {
 
 impl fmt::Display for IhdrChunkData {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
+        writeln!(
             f,
             "IHDR {{\n  Width: {},\n  Height: {},\n  Bit depth: {},\n  Color type: {},\n  Compression method: {},\n  Filter method: {},\n  Interlace method: {}\n}}",
             self.width, self.height, self.bit_depth, self.color_type, self.compression_method, self.filter_method, self.interlace_method
@@ -422,7 +452,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
     let args: Vec<String> = env::args().collect();
     let file = args.get(1).expect("Please provide a path to the PNG file");
     let png_file = parse_png(file)?;
-    dbg!(png_file);
+
     Ok(())
 }
 
@@ -430,6 +460,17 @@ fn main() -> Result<(), Box<dyn std::error::Error + 'static>> {
 struct PngFile<'a> {
     name: &'a str,
     chunks: Vec<Chunk>,
+}
+
+impl<'a> PngFile<'a> {
+    pub fn ihdr(&self) -> &IhdrChunkData {
+        let ihdr_chunk = self.chunks.first().unwrap();
+        let data = ihdr_chunk.data();
+        match data {
+            ChunkData::Ihdr(ihdr_data) => &ihdr_data,
+            _ => unreachable!(),
+        }
+    }
 }
 
 impl fmt::Display for PngFile<'_> {
