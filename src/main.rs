@@ -11,6 +11,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ihdr = png_file.ihdr();
 
+    println!("{ihdr}");
+
     let width = ihdr.width();
     let height = ihdr.height();
 
