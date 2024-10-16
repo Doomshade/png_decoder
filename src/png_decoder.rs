@@ -7,14 +7,14 @@ const PNG_SIGNATURE_LENGTH: usize = 8;
 const PNG_SIGNATURE: [u8; PNG_SIGNATURE_LENGTH] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
 #[derive(Debug, PartialEq)]
-enum ChunkData {
+pub(crate) enum ChunkData {
     Ihdr(IhdrChunkData),
     Idat(Vec<u8>),
     Iend,
 }
 
 #[derive(Debug, PartialEq)]
-enum BitDepth {
+pub enum BitDepth {
     _1,
     _2,
     _4,
@@ -55,7 +55,7 @@ impl fmt::Display for BitDepth {
 }
 
 #[derive(Debug, PartialEq)]
-enum ColorType {
+pub enum ColorType {
     Grayscale,
     Truecolor,
     Indexed,
@@ -78,7 +78,7 @@ impl TryFrom<u8> for ColorType {
 }
 
 impl ColorType {
-    fn value(&self) -> u8 {
+    pub(crate) fn value(&self) -> u8 {
         match &self {
             ColorType::Grayscale => 0,
             ColorType::Truecolor => 2,
@@ -88,7 +88,7 @@ impl ColorType {
         }
     }
 
-    fn combination_allowed(&self, bit_depth: &BitDepth) -> bool {
+    pub(crate) fn combination_allowed(&self, bit_depth: &BitDepth) -> bool {
         match &self {
             ColorType::Grayscale => {
                 *bit_depth == BitDepth::_1
@@ -128,7 +128,7 @@ impl fmt::Display for ColorType {
 }
 
 #[derive(Debug, PartialEq)]
-enum CompressionMethod {
+pub enum CompressionMethod {
     DeflateInflate,
 }
 
@@ -143,7 +143,7 @@ impl TryFrom<u8> for CompressionMethod {
 }
 
 impl CompressionMethod {
-    fn value(&self) -> u8 {
+    pub(crate) fn value(&self) -> u8 {
         match self {
             CompressionMethod::DeflateInflate => 0,
         }
@@ -160,7 +160,7 @@ impl fmt::Display for CompressionMethod {
 }
 
 #[derive(Debug, PartialEq)]
-enum FilterMethod {
+pub enum FilterMethod {
     AdaptiveFiltering,
 }
 
@@ -192,7 +192,7 @@ impl fmt::Display for FilterMethod {
 }
 
 #[derive(Debug, PartialEq)]
-enum InterlaceMethod {
+pub enum InterlaceMethod {
     None,
     Adam7,
 }
@@ -338,8 +338,8 @@ impl fmt::Display for ChunkData {
 }
 
 #[derive(Debug)]
-struct Chunk {
-    pub length: usize,
+pub(crate) struct Chunk {
+    length: usize,
     data: ChunkData,
     crc: [u8; 4],
 }
@@ -360,6 +360,9 @@ impl Chunk {
             ChunkData::Idat(_) => "IDAT",
             ChunkData::Iend => "IEND",
         }
+    }
+    fn length(&self) -> usize {
+        self.length
     }
 }
 
@@ -463,6 +466,12 @@ impl<'a> PngFile<'a> {
             _ => unreachable!(),
         }
     }
+    pub fn name(&self) -> &'a str {
+        self.name
+    }
+    pub(crate) fn chunks(&self) -> &Vec<Chunk> {
+        &self.chunks
+    }
 }
 
 impl fmt::Display for PngFile<'_> {
@@ -477,7 +486,7 @@ impl fmt::Display for PngFile<'_> {
     }
 }
 
-pub fn parse_png<'a>(file_path: &'a str) -> Result<PngFile<'a>, Box<dyn std::error::Error + 'static>> {
+pub fn parse_png<'a>(file_path: &'a str) -> Result<PngFile<'a>, io::Error> {
     let mut chunks = vec![];
     let contents = fs::read(file_path)?;
     let mut png_iter = PngIterator::new(contents.into_iter());
@@ -497,5 +506,3 @@ pub fn parse_png<'a>(file_path: &'a str) -> Result<PngFile<'a>, Box<dyn std::err
         chunks.push(chunk);
     }
 }
-
-
