@@ -1,6 +1,8 @@
+use compress::zlib;
 use std::fmt;
 use std::fs;
 use std::io;
+use std::io::Read;
 use std::usize;
 
 const PNG_SIGNATURE_LENGTH: usize = 8;
@@ -9,7 +11,7 @@ const PNG_SIGNATURE: [u8; PNG_SIGNATURE_LENGTH] = [0x89, b'P', b'N', b'G', 0x0D,
 #[derive(Debug, PartialEq)]
 pub(crate) enum ChunkData {
     Ihdr(IhdrChunkData),
-    Idat(Vec<u8>),
+    Idat(IdatChunkData),
     Iend,
 }
 
@@ -266,6 +268,14 @@ impl IhdrChunkData {
     pub fn height(&self) -> u32 {
         self.height
     }
+
+    pub fn bit_depth(&self) -> &BitDepth {
+        &self.bit_depth
+    }
+
+    pub fn color_type(&self) -> &ColorType {
+        &self.color_type
+    }
 }
 
 impl TryFrom<Vec<u8>> for IhdrChunkData {
@@ -324,6 +334,66 @@ impl fmt::Display for IhdrChunkData {
             "IHDR {{\n  Width: {},\n  Height: {},\n  Bit depth: {},\n  Color type: {},\n  Compression method: {},\n  Filter method: {},\n  Interlace method: {}\n}}",
             self.width, self.height, self.bit_depth, self.color_type, self.compression_method, self.filter_method, self.interlace_method
         )
+    }
+}
+
+#[derive(PartialEq, Debug)]
+pub struct IdatChunkData {
+    scanlines: Vec<(FilterType, Vec<u8>)>,
+}
+
+impl IdatChunkData {
+    pub fn scanlines(&self) -> &Vec<(FilterType, Vec<u8>)> {
+        &self.scanlines
+    }
+    pub fn pixels(&self) -> Vec<u8> {
+        self.scanlines
+            .iter()
+            .map(|(_, pixels)| pixels)
+            .flatten()
+            .map(|x| *x)
+            .collect::<Vec<u8>>()
+    }
+}
+
+#[derive(PartialEq, Debug)]
+pub enum FilterType {
+    None,
+    Sub,
+    Up,
+    Average,
+    Paeth,
+}
+
+impl TryFrom<u8> for FilterType {
+    type Error = String;
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(FilterType::None),
+            1 => Ok(FilterType::Sub),
+            2 => Ok(FilterType::Up),
+            3 => Ok(FilterType::Average),
+            4 => Ok(FilterType::Paeth),
+            _ => Err(format!("Invalid filter type: {value}")),
+        }
+    }
+}
+
+impl TryFrom<Vec<u8>> for IdatChunkData {
+    type Error = String;
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        let r = value.as_slice();
+        println!("Parsing: {r:#04X?}");
+        let mut decoder = zlib::Decoder::new(r);
+        let mut scanline = vec![];
+        let _ = decoder
+            .read_to_end(&mut scanline)
+            .map_err(|err| err.to_string())?;
+        let mut iter = scanline.into_iter();
+        let filter_type = FilterType::try_from(iter.next().unwrap())?;
+        Ok(Self {
+            scanlines: vec![(filter_type, iter.as_slice().to_vec())],
+        })
     }
 }
 
@@ -424,9 +494,9 @@ impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
         let crc = self.read_bytes()?;
         let chunk_data = match chunk_type.as_str() {
             "IHDR" => ChunkData::Ihdr(IhdrChunkData::try_from(chunk_data_raw).unwrap()),
-            "IDAT" => ChunkData::Idat(chunk_data_raw),
+            "IDAT" => ChunkData::Idat(IdatChunkData::try_from(chunk_data_raw).unwrap()),
             "IEND" => ChunkData::Iend,
-            _ => todo!(),
+            _ => todo!("Chunk type {chunk_type} not yet implemented"),
         };
 
         Ok(Chunk::new(length as usize, chunk_data, crc))
@@ -463,6 +533,17 @@ impl<'a> PngFile<'a> {
         let data = ihdr_chunk.data();
         match data {
             ChunkData::Ihdr(ihdr_data) => &ihdr_data,
+            _ => unreachable!(),
+        }
+    }
+    pub fn data(&self) -> &IdatChunkData {
+        let data_chunk = self
+            .chunks
+            .iter()
+            .find(|&chunk| matches!(chunk.data, ChunkData::Idat(_)))
+            .unwrap();
+        match &data_chunk.data {
+            ChunkData::Idat(data) => &data,
             _ => unreachable!(),
         }
     }
