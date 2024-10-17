@@ -1,7 +1,7 @@
 use std::env;
 
 use png_decoder::{BitDepth, ColorType};
-use show_image::PixelFormat;
+use show_image::{Alpha, PixelFormat};
 pub mod png_decoder;
 
 #[show_image::main]
@@ -24,12 +24,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Image width: {width}, height: {height}");
 
     let data = png_file.data();
-    println!("Image data: {data:?}");
     let image_data = data.pixels();
 
     let pixel_format = match ihdr.color_type() {
         ColorType::Grayscale => PixelFormat::Mono8,
         ColorType::Truecolor => PixelFormat::Rgb8,
+        ColorType::TruecolorAndAlpha => PixelFormat::Rgba8(Alpha::Unpremultiplied),
+        ColorType::GrayscaleAndAlpha => PixelFormat::MonoAlpha8(Alpha::Unpremultiplied),
         _ => panic!("Unknown pixel format: {}", ihdr.color_type()),
     };
 

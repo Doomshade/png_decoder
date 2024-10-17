@@ -1,3 +1,4 @@
+use compress::checksum;
 use compress::zlib;
 use std::fmt;
 use std::fs;
@@ -15,7 +16,17 @@ pub(crate) enum ChunkData {
     Iend,
 }
 
-#[derive(Debug, PartialEq)]
+impl ChunkData {
+    pub fn chunk_ident(&self) -> &'static str {
+        match self {
+            Self::Ihdr(_) => "IHDR",
+            Self::Idat(_) => "IDAT",
+            Self::Iend => "IEND",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum BitDepth {
     _1,
     _2,
@@ -56,7 +67,7 @@ impl fmt::Display for BitDepth {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ColorType {
     Grayscale,
     Truecolor,
@@ -129,7 +140,7 @@ impl fmt::Display for ColorType {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CompressionMethod {
     DeflateInflate,
 }
@@ -161,7 +172,7 @@ impl fmt::Display for CompressionMethod {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum FilterMethod {
     AdaptiveFiltering,
 }
@@ -193,7 +204,7 @@ impl fmt::Display for FilterMethod {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum InterlaceMethod {
     None,
     Adam7,
@@ -229,7 +240,7 @@ impl fmt::Display for InterlaceMethod {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IhdrChunkData {
     width: u32,
     height: u32,
@@ -379,21 +390,25 @@ impl TryFrom<u8> for FilterType {
     }
 }
 
-impl TryFrom<Vec<u8>> for IdatChunkData {
+impl TryFrom<(&IhdrChunkData, Vec<u8>)> for IdatChunkData {
     type Error = String;
-    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        let r = value.as_slice();
-        println!("Parsing: {r:#04X?}");
+    fn try_from(value: (&IhdrChunkData, Vec<u8>)) -> Result<Self, Self::Error> {
+        let ihdr = value.0;
+        let width = ihdr.width();
+        let r = value.1.as_slice();
         let mut decoder = zlib::Decoder::new(r);
-        let mut scanline = vec![];
+        let mut data = vec![];
         let _ = decoder
-            .read_to_end(&mut scanline)
+            .read_to_end(&mut data)
             .map_err(|err| err.to_string())?;
-        let mut iter = scanline.into_iter();
-        let filter_type = FilterType::try_from(iter.next().unwrap())?;
-        Ok(Self {
-            scanlines: vec![(filter_type, iter.as_slice().to_vec())],
-        })
+        let scanlines = data
+            .into_iter()
+            .as_slice()
+            .chunks(width as usize + 1)
+            .map(|chunk| (FilterType::try_from(chunk[0]).unwrap(), chunk[1..].to_vec()))
+            .collect::<Vec<(FilterType, Vec<u8>)>>();
+        let adler_crc = checksum::adler::State32::new();
+        Ok(Self { scanlines })
     }
 }
 
@@ -418,20 +433,13 @@ impl Chunk {
     pub fn new(length: usize, data: ChunkData, crc: [u8; 4]) -> Self {
         Self { length, data, crc }
     }
-    fn crc(&self) -> &[u8; 4] {
+    pub fn crc(&self) -> &[u8; 4] {
         &self.crc
     }
-    fn data(&self) -> &ChunkData {
+    pub fn data(&self) -> &ChunkData {
         &self.data
     }
-    fn chunk_type(&self) -> &str {
-        match self.data {
-            ChunkData::Ihdr(_) => "IHDR",
-            ChunkData::Idat(_) => "IDAT",
-            ChunkData::Iend => "IEND",
-        }
-    }
-    fn length(&self) -> usize {
+    pub fn length(&self) -> usize {
         self.length
     }
 }
@@ -446,11 +454,12 @@ impl fmt::Display for Chunk {
 
 struct PngIterator<I: ExactSizeIterator<Item = u8>> {
     inner: I,
+    ihdr: Option<IhdrChunkData>,
 }
 
 impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
     fn new(inner: I) -> Self {
-        PngIterator { inner }
+        PngIterator { inner, ihdr: None }
     }
 
     fn validate_png_signature(&mut self) -> io::Result<()> {
@@ -470,7 +479,7 @@ impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
     /// - chunk type (4 bytes)
     /// - chunk data (length bytes)
     /// - CRC (4 bytes)
-    fn parse_chunk(&mut self) -> io::Result<Chunk> {
+    fn parse_chunk(&mut self) -> io::Result<Option<Chunk>> {
         let length = u32::from_be_bytes(self.read_bytes()?);
         let chunk_type = String::from_utf8(self.read_bytes::<4>()?.to_vec()).map_err(|e| {
             io::Error::new(
@@ -493,13 +502,23 @@ impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
 
         let crc = self.read_bytes()?;
         let chunk_data = match chunk_type.as_str() {
-            "IHDR" => ChunkData::Ihdr(IhdrChunkData::try_from(chunk_data_raw).unwrap()),
-            "IDAT" => ChunkData::Idat(IdatChunkData::try_from(chunk_data_raw).unwrap()),
+            "IHDR" => {
+                let try_from = IhdrChunkData::try_from(chunk_data_raw).unwrap();
+                self.ihdr = Some(try_from.clone());
+                let ihdr = ChunkData::Ihdr(try_from);
+                ihdr
+            }
+            "IDAT" => ChunkData::Idat(
+                IdatChunkData::try_from((&self.ihdr.unwrap().clone(), chunk_data_raw)).unwrap(),
+            ),
             "IEND" => ChunkData::Iend,
-            _ => todo!("Chunk type {chunk_type} not yet implemented"),
+            _ => {
+                println!("Skipping header: {chunk_type}");
+                return Ok(None);
+            }
         };
 
-        Ok(Chunk::new(length as usize, chunk_data, crc))
+        Ok(Some(Chunk::new(length as usize, chunk_data, crc)))
     }
 
     fn read_bytes<const N: usize>(&mut self) -> io::Result<[u8; N]> {
@@ -575,15 +594,17 @@ pub fn parse_png<'a>(file_path: &'a str) -> Result<PngFile<'a>, io::Error> {
     println!("PNG signature valid");
     loop {
         let chunk = png_iter.parse_chunk()?;
-        println!("Chunk type: {}", chunk.chunk_type());
-        if chunk.data() == &ChunkData::Iend {
+        if let Some(chunk) = chunk {
+            println!("Chunk type: {:?}", chunk.chunk_type());
+            if chunk.data() == &ChunkData::Iend {
+                chunks.push(chunk);
+                println!("Read all chunks");
+                return Ok(PngFile {
+                    name: file_path,
+                    chunks,
+                });
+            }
             chunks.push(chunk);
-            println!("Read all chunks");
-            return Ok(PngFile {
-                name: file_path,
-                chunks,
-            });
         }
-        chunks.push(chunk);
     }
 }
