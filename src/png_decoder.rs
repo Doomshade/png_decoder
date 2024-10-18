@@ -396,7 +396,6 @@ impl TryFrom<(IhdrChunkData, Vec<u8>)> for IdatChunkData {
         // Decode the raw data using zlib (DEFLATE)
         // NOTE: The only valid de/compression for PNG is DEFLATE, however it's open
         //       to extension, so we should definitely check the compression type here
-        let ihdr = value.0;
         let raw_data = value.1.as_slice();
         let mut decoder = zlib::Decoder::new(raw_data);
         let mut data = vec![];
