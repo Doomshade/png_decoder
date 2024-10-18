@@ -390,21 +390,39 @@ impl TryFrom<u8> for FilterType {
     }
 }
 
-impl TryFrom<(&IhdrChunkData, Vec<u8>)> for IdatChunkData {
+impl TryFrom<(IhdrChunkData, Vec<u8>)> for IdatChunkData {
     type Error = String;
-    fn try_from(value: (&IhdrChunkData, Vec<u8>)) -> Result<Self, Self::Error> {
+    fn try_from(value: (IhdrChunkData, Vec<u8>)) -> Result<Self, Self::Error> {
+        // Decode the raw data using zlib (DEFLATE)
+        // NOTE: The only valid de/compression for PNG is DEFLATE, however it's open
+        //       to extension, so we should definitely check the compression type here
         let ihdr = value.0;
-        let width = ihdr.width();
-        let r = value.1.as_slice();
-        let mut decoder = zlib::Decoder::new(r);
+        let raw_data = value.1.as_slice();
+        let mut decoder = zlib::Decoder::new(raw_data);
         let mut data = vec![];
         let _ = decoder
             .read_to_end(&mut data)
             .map_err(|err| err.to_string())?;
+
+        let ihdr = value.0;
+        let row_width = ihdr.width();
+        let color_depth_bytes = match ihdr.bit_depth() {
+            BitDepth::_1 | BitDepth::_2 | BitDepth::_4 | BitDepth::_8 => 1,
+            BitDepth::_16 => 2,
+        };
+        let pixel_width = match ihdr.color_type() {
+            ColorType::Grayscale => 1,
+            ColorType::GrayscaleAndAlpha => 2,
+            ColorType::Truecolor => 3,
+            ColorType::TruecolorAndAlpha => 4,
+            ColorType::Indexed => 4, // is it 4?
+        };
+        let pixels_per_scanline = row_width as usize * color_depth_bytes * pixel_width + 1;
+
         let scanlines = data
             .into_iter()
             .as_slice()
-            .chunks(width as usize + 1)
+            .chunks_exact(pixels_per_scanline)
             .map(|chunk| (FilterType::try_from(chunk[0]).unwrap(), chunk[1..].to_vec()))
             .collect::<Vec<(FilterType, Vec<u8>)>>();
         let adler_crc = checksum::adler::State32::new();
@@ -508,9 +526,10 @@ impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
                 let ihdr = ChunkData::Ihdr(try_from);
                 ihdr
             }
-            "IDAT" => ChunkData::Idat(
-                IdatChunkData::try_from((&self.ihdr.unwrap().clone(), chunk_data_raw)).unwrap(),
-            ),
+            "IDAT" => {
+                let ihdr_chunk_data = self.ihdr.clone().unwrap();
+                ChunkData::Idat(IdatChunkData::try_from((ihdr_chunk_data, chunk_data_raw)).unwrap())
+            }
             "IEND" => ChunkData::Iend,
             _ => {
                 println!("Skipping header: {chunk_type}");
@@ -595,7 +614,7 @@ pub fn parse_png<'a>(file_path: &'a str) -> Result<PngFile<'a>, io::Error> {
     loop {
         let chunk = png_iter.parse_chunk()?;
         if let Some(chunk) = chunk {
-            println!("Chunk type: {:?}", chunk.chunk_type());
+            println!("Chunk type: {:?}", chunk.data().chunk_ident());
             if chunk.data() == &ChunkData::Iend {
                 chunks.push(chunk);
                 println!("Read all chunks");
