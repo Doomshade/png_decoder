@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, fs, io, path};
 
 use png_decoder::{BitDepth, ColorType};
 use show_image::{Alpha, PixelFormat};
@@ -8,7 +8,9 @@ pub mod png_decoder;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     let file = args.get(1).expect("Please provide a path to the PNG file");
-    let png_file = png_decoder::parse_png(file)?;
+
+    let contents = fs::read(file)?;
+    let png_file = png_decoder::parse_png(contents)?;
 
     let ihdr = png_file.ihdr();
 
@@ -39,8 +41,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &image_data,
     );
 
-    println!("Showing image");
-    let window = show_image::create_window("image", Default::default())?;
+    let path = path::Path::new(file);
+    let file_name = path::Path::file_name(path).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("Failed to get the file name of {file}"),
+        )
+    })?;
+    let window = show_image::create_window(
+        file_name
+            .to_str()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "IDK"))?,
+        Default::default(),
+    )?;
     window.set_image(file, image)?;
 
     for event in window.event_channel()? {
@@ -72,7 +85,8 @@ mod test {
             let path_str = path
                 .to_str()
                 .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Path not found"))?;
-            let p = png_decoder::parse_png(path_str)?;
+            let content = fs::read(path_str)?;
+            let p = png_decoder::parse_png(content)?;
             println!("{p}");
         }
         Ok(())

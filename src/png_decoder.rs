@@ -559,12 +559,11 @@ impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
 }
 
 #[derive(Debug)]
-pub struct PngFile<'a> {
-    name: &'a str,
+pub struct PngFile {
     chunks: Vec<Chunk>,
 }
 
-impl<'a> PngFile<'a> {
+impl PngFile {
     pub fn ihdr(&self) -> &IhdrChunkData {
         let ihdr_chunk = self.chunks.first().unwrap();
         let data = ihdr_chunk.data();
@@ -584,17 +583,14 @@ impl<'a> PngFile<'a> {
             _ => unreachable!(),
         }
     }
-    pub fn name(&self) -> &'a str {
-        self.name
-    }
+
     pub(crate) fn chunks(&self) -> &Vec<Chunk> {
         &self.chunks
     }
 }
 
-impl fmt::Display for PngFile<'_> {
+impl fmt::Display for PngFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "Name: {}", self.name)?;
         writeln!(f, "Chunk #: {}\n", self.chunks.len())?;
         self.chunks
             .iter()
@@ -604,23 +600,18 @@ impl fmt::Display for PngFile<'_> {
     }
 }
 
-pub fn parse_png<'a>(file_path: &'a str) -> Result<PngFile<'a>, io::Error> {
-    let mut chunks = vec![];
-    let contents = fs::read(file_path)?;
-    let mut png_iter = PngIterator::new(contents.into_iter());
+/// Parses the PNG
+pub fn parse_png(content: Vec<u8>) -> Result<PngFile, io::Error> {
+    let mut png_iter = PngIterator::new(content.into_iter());
     png_iter.validate_png_signature()?;
-    println!("PNG signature valid");
+
+    let mut chunks = vec![];
     loop {
         let chunk = png_iter.parse_chunk()?;
         if let Some(chunk) = chunk {
-            println!("Chunk type: {:?}", chunk.data().chunk_ident());
             if chunk.data() == &ChunkData::Iend {
                 chunks.push(chunk);
-                println!("Read all chunks");
-                return Ok(PngFile {
-                    name: file_path,
-                    chunks,
-                });
+                return Ok(PngFile { chunks });
             }
             chunks.push(chunk);
         }
