@@ -50,9 +50,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ColorType::GrayscaleAndAlpha => PixelFormat::MonoAlpha8(Alpha::Unpremultiplied),
         _ => panic!("Unknown pixel format: {}", ihdr.color_type()),
     };
+
+    let pixels = png_file.try_into_pixels()?;
+    println!("Raw data length: {}", pixels.len());
     let image = show_image::ImageView::new(
         show_image::ImageInfo::new(pixel_format, width, height),
-        png_file.data().pixels(),
+        &pixels,
     );
 
     // Create a window and display the image.
@@ -61,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for event in window.event_channel()? {
         if let show_image::event::WindowEvent::KeyboardInput(event) = event {
-            println!("{:#?}", event);
+            //println!("{:#?}", event);
             if event.input.key_code == Some(show_image::event::VirtualKeyCode::Escape)
                 && event.input.state.is_pressed()
             {

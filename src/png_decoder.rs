@@ -1,7 +1,6 @@
 use compress::checksum;
 use compress::zlib;
 use std::fmt;
-use std::fs;
 use std::io;
 use std::io::Read;
 use std::usize;
@@ -14,16 +13,6 @@ pub(crate) enum ChunkData {
     Ihdr(IhdrChunkData),
     Idat(IdatChunkData),
     Iend,
-}
-
-impl ChunkData {
-    pub fn chunk_ident(&self) -> &'static str {
-        match self {
-            Self::Ihdr(_) => "IHDR",
-            Self::Idat(_) => "IDAT",
-            Self::Iend => "IEND",
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -50,7 +39,7 @@ impl TryFrom<u8> for BitDepth {
 }
 
 impl BitDepth {
-    fn value(&self) -> u8 {
+    pub fn value(&self) -> u8 {
         match &self {
             BitDepth::_1 => 1,
             BitDepth::_2 => 2,
@@ -98,6 +87,16 @@ impl ColorType {
             ColorType::Indexed => 3,
             ColorType::GrayscaleAndAlpha => 4,
             ColorType::TruecolorAndAlpha => 6,
+        }
+    }
+
+    pub fn num_samples(&self) -> u8 {
+        match &self {
+            ColorType::Grayscale => 1,
+            ColorType::Truecolor => 3,
+            ColorType::Indexed => 1,
+            ColorType::GrayscaleAndAlpha => 2,
+            ColorType::TruecolorAndAlpha => 4,
         }
     }
 
@@ -287,44 +286,51 @@ impl IhdrChunkData {
     pub fn color_type(&self) -> &ColorType {
         &self.color_type
     }
+
+    /// Calculates bytes needed per pixel
+    pub fn bpp(&self) -> u8 {
+        // FIXME: This does not need to be calculated every time
+        let mut bpp = self.color_type().num_samples() * self.bit_depth().value();
+        let round_up = (bpp % 8) != 0;
+        bpp /= 8;
+        if round_up {
+            bpp += 1;
+        }
+        bpp
+    }
 }
 
 impl TryFrom<Vec<u8>> for IhdrChunkData {
     type Error = String;
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        let mut buf = [0; 4];
         let mut iter = value.iter();
 
-        for b in &mut buf {
-            *b = *iter.next().ok_or("Expected 4 bytes for width")?;
-        }
-
-        let width = u32::from_be_bytes(buf);
-
-        buf = [0; 4];
-
-        for b in &mut buf {
-            *b = *iter.next().ok_or("Expected 4 bytes for height")?;
-        }
-
-        let height = u32::from_be_bytes(buf);
-
+        // Per specification, the IHDR chunk looks as follows:
+        // Width:              4 bytes
+        // Height:             4 bytes
+        // Bit depth:          1 byte
+        // Color type:         1 byte
+        // Compression method: 1 byte
+        // Filter method:      1 byte
+        // Interlace method:   1 byte
+        let width = u32::from_be_bytes(
+            read_bytes(&mut iter, &mut [0; 4]).ok_or("Expected 4 bytes for width")?,
+        );
+        let height = u32::from_be_bytes(
+            read_bytes(&mut iter, &mut [0; 4]).ok_or("Expected 4 bytes for height")?,
+        );
         let bit_depth = BitDepth::try_from(*iter.next().ok_or("Expected bit depth byte")?)?;
-
         let color_type = ColorType::try_from(*iter.next().ok_or("Expected color type byte")?)?;
+        let compression_method =
+            CompressionMethod::try_from(*iter.next().ok_or("Expected compression method byte")?)?;
+        let filter_method =
+            FilterMethod::try_from(*iter.next().ok_or("Expected filter method byte")?)?;
+        let interlace_method =
+            InterlaceMethod::try_from(*iter.next().ok_or("Expected interlace method byte")?)?;
 
         if !color_type.combination_allowed(&bit_depth) {
             return Err(format!("The combination of bit depth {bit_depth} and color type {color_type} is not allowed"));
         }
-
-        let compression_method =
-            CompressionMethod::try_from(*iter.next().ok_or("Expected compression method byte")?)?;
-
-        let filter_method =
-            FilterMethod::try_from(*iter.next().ok_or("Expected filter method byte")?)?;
-
-        let interlace_method =
-            InterlaceMethod::try_from(*iter.next().ok_or("Expected interlace method byte")?)?;
 
         Ok(Self {
             width,
@@ -348,28 +354,58 @@ impl fmt::Display for IhdrChunkData {
     }
 }
 
+pub type IdatChunkData = Vec<u8>;
+
 #[derive(PartialEq, Debug)]
-pub struct IdatChunkData {
-    scanlines: Vec<(FilterType, Vec<u8>)>,
-    pixels: Vec<u8>,
+pub struct IdatCombinedChunkData {
+    scanlines: Vec<(FilterType, IdatChunkData)>,
 }
 
-impl IdatChunkData {
-    pub fn new(scanlines: Vec<(FilterType, Vec<u8>)>) -> Self {
-        let pixels = scanlines
-            .iter()
-            .map(|(_, pixels)| pixels)
-            .flatten()
-            .map(|x| *x)
-            .collect::<Vec<u8>>();
-
-        Self { scanlines, pixels }
+impl IdatCombinedChunkData {
+    pub fn new(scanlines: Vec<(FilterType, IdatChunkData)>) -> Self {
+        Self { scanlines }
     }
-    pub fn scanlines(&self) -> &Vec<(FilterType, Vec<u8>)> {
+    pub fn into_scanlines(self) -> Vec<(FilterType, IdatChunkData)> {
+        self.scanlines
+    }
+    pub fn scanlines(&self) -> &Vec<(FilterType, IdatChunkData)> {
         &self.scanlines
     }
-    pub fn pixels(&self) -> &Vec<u8> {
-        &self.pixels
+}
+
+impl TryFrom<(&IhdrChunkData, Vec<IdatChunkData>)> for IdatCombinedChunkData {
+    type Error = String;
+    fn try_from(value: (&IhdrChunkData, Vec<IdatChunkData>)) -> Result<Self, Self::Error> {
+        // Decode the raw data using zlib (DEFLATE)
+        // FIXME: The only valid de/compression for PNG is DEFLATE, however it's open
+        //       to extension, so we should definitely check the compression type here
+        let all_data = value.1.into_iter().flatten().collect::<Vec<u8>>();
+        let raw_data = all_data.as_slice();
+
+        let mut decoder = zlib::Decoder::new(raw_data);
+        let mut data = vec![];
+        let _ = decoder
+            .read_to_end(&mut data)
+            .map_err(|err| err.to_string())?;
+
+        let ihdr = value.0;
+        let row_width = ihdr.width();
+        let color_depth_bytes = match ihdr.bit_depth() {
+            BitDepth::_1 | BitDepth::_2 | BitDepth::_4 | BitDepth::_8 => 1,
+            BitDepth::_16 => 2,
+        };
+        let pixel_width = ihdr.color_type().num_samples();
+        const FILTER_TYPE_WIDTH: usize = 1;
+        let scanline_stride =
+            FILTER_TYPE_WIDTH + (row_width as usize * color_depth_bytes * pixel_width as usize);
+
+        let scanlines = data
+            .into_iter()
+            .as_slice()
+            .chunks_exact(scanline_stride)
+            .map(|chunk| (FilterType::try_from(chunk[0]).unwrap(), chunk[1..].to_vec()))
+            .collect::<Vec<(FilterType, Vec<u8>)>>();
+        Ok(Self::new(scanlines))
     }
 }
 
@@ -396,48 +432,6 @@ impl TryFrom<u8> for FilterType {
     }
 }
 
-impl TryFrom<(IhdrChunkData, Vec<u8>)> for IdatChunkData {
-    type Error = String;
-    fn try_from(value: (IhdrChunkData, Vec<u8>)) -> Result<Self, Self::Error> {
-        // FIXME: This implementation only allows for a single IDAT chunk.
-
-        // Decode the raw data using zlib (DEFLATE)
-        // FIXME: The only valid de/compression for PNG is DEFLATE, however it's open
-        //       to extension, so we should definitely check the compression type here
-        let raw_data = value.1.as_slice();
-        let mut decoder = zlib::Decoder::new(raw_data);
-        let mut data = vec![];
-        let _ = decoder
-            .read_to_end(&mut data)
-            .map_err(|err| err.to_string())?;
-
-        let ihdr = value.0;
-        let row_width = ihdr.width();
-        let color_depth_bytes = match ihdr.bit_depth() {
-            BitDepth::_1 | BitDepth::_2 | BitDepth::_4 | BitDepth::_8 => 1,
-            BitDepth::_16 => 2,
-        };
-        let pixel_width = match ihdr.color_type() {
-            ColorType::Grayscale => 1,
-            ColorType::GrayscaleAndAlpha => 2,
-            ColorType::Truecolor => 3,
-            ColorType::TruecolorAndAlpha => 4,
-            ColorType::Indexed => 4, // is it 4?
-        };
-        let pixels_per_scanline = row_width as usize * color_depth_bytes * pixel_width + 1;
-
-        let scanlines = data
-            .into_iter()
-            .as_slice()
-            .chunks_exact(pixels_per_scanline)
-            .map(|chunk| (FilterType::try_from(chunk[0]).unwrap(), chunk[1..].to_vec()))
-            .collect::<Vec<(FilterType, Vec<u8>)>>();
-        // FIXME: Check CRC
-        let adler_crc = checksum::adler::State32::new();
-        Ok(Self::new(scanlines))
-    }
-}
-
 impl fmt::Display for ChunkData {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -450,42 +444,34 @@ impl fmt::Display for ChunkData {
 
 #[derive(Debug)]
 pub(crate) struct Chunk {
-    length: usize,
     data: ChunkData,
-    crc: [u8; 4],
 }
 
 impl Chunk {
-    pub fn new(length: usize, data: ChunkData, crc: [u8; 4]) -> Self {
-        Self { length, data, crc }
-    }
-    pub fn crc(&self) -> &[u8; 4] {
-        &self.crc
+    pub fn new(data: ChunkData) -> Self {
+        Self { data }
     }
     pub fn data(&self) -> &ChunkData {
         &self.data
     }
-    pub fn length(&self) -> usize {
-        self.length
+    pub fn into_data(self) -> ChunkData {
+        self.data
     }
 }
 
 impl fmt::Display for Chunk {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "Length: {}", self.length)?;
-        writeln!(f, "Data: {}", self.data)?;
-        write!(f, "CRC: {:?}", self.crc)
+        write!(f, "Data: {}", self.data)
     }
 }
 
 struct PngIterator<I: ExactSizeIterator<Item = u8>> {
     inner: I,
-    ihdr: Option<IhdrChunkData>,
 }
 
 impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
     fn new(inner: I) -> Self {
-        PngIterator { inner, ihdr: None }
+        PngIterator { inner }
     }
 
     fn validate_png_signature(&mut self) -> io::Result<()> {
@@ -523,19 +509,11 @@ impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
                 )
             })?);
         }
+        let _crc: [u8; 4] = self.read_bytes()?;
 
-        let crc = self.read_bytes()?;
         let chunk_data = match chunk_type.as_str() {
-            "IHDR" => {
-                let try_from = IhdrChunkData::try_from(chunk_data_raw).unwrap();
-                self.ihdr = Some(try_from.clone());
-                let ihdr = ChunkData::Ihdr(try_from);
-                ihdr
-            }
-            "IDAT" => {
-                let ihdr_chunk_data = self.ihdr.clone().unwrap();
-                ChunkData::Idat(IdatChunkData::try_from((ihdr_chunk_data, chunk_data_raw)).unwrap())
-            }
+            "IHDR" => ChunkData::Ihdr(IhdrChunkData::try_from(chunk_data_raw).unwrap()),
+            "IDAT" => ChunkData::Idat(chunk_data_raw),
             "IEND" => ChunkData::Iend,
             _ => {
                 println!("Skipping header: {chunk_type}");
@@ -543,9 +521,12 @@ impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
             }
         };
 
-        Ok(Some(Chunk::new(length as usize, chunk_data, crc)))
+        // FIXME: Check CRC
+        let _adler_crc = checksum::adler::State32::new();
+        Ok(Some(Chunk::new(chunk_data)))
     }
 
+    // FIXME: This is a dupliate of the generic `read_bytes(Iter)` function.
     fn read_bytes<const N: usize>(&mut self) -> io::Result<[u8; N]> {
         let mut buf = [0; N];
         if N == 0 {
@@ -563,6 +544,21 @@ impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
     }
 }
 
+fn read_bytes<'a, const N: usize>(
+    iter: &mut impl Iterator<Item = &'a u8>,
+    buf: &mut [u8; N],
+) -> Option<[u8; N]> {
+    if N == 0 {
+        return Some(*buf);
+    }
+
+    for i in 0..N {
+        buf[i] = *iter.next()?;
+    }
+
+    Some(*buf)
+}
+
 #[derive(Debug)]
 pub struct PngFile {
     chunks: Vec<Chunk>,
@@ -577,20 +573,61 @@ impl PngFile {
             _ => unreachable!(),
         }
     }
-    pub fn data(&self) -> &IdatChunkData {
-        let data_chunk = self
-            .chunks
-            .iter()
-            .find(|&chunk| matches!(chunk.data, ChunkData::Idat(_)))
-            .unwrap();
-        match &data_chunk.data {
-            ChunkData::Idat(data) => &data,
+    pub fn try_into_pixels(self) -> Result<Vec<u8>, String> {
+        let mut iter = self.chunks.into_iter();
+        let first_chunk = iter.next().unwrap();
+        let ihdr_chunk = match first_chunk.into_data() {
+            ChunkData::Ihdr(ihdr_data) => ihdr_data,
             _ => unreachable!(),
-        }
-    }
+        };
 
-    pub(crate) fn chunks(&self) -> &Vec<Chunk> {
-        &self.chunks
+        // Combine the IDAT chunks
+        let encoded_pixels = iter
+            .filter(|chunk| matches!(chunk.data, ChunkData::Idat(_)))
+            .map(|data_chunk| match data_chunk.data {
+                ChunkData::Idat(data) => data,
+                _ => unreachable!(),
+            })
+            .collect::<Vec<IdatChunkData>>();
+
+        let bpp = ihdr_chunk.bpp() as usize;
+        let scanlines = IdatCombinedChunkData::try_from((&ihdr_chunk, encoded_pixels))
+            .map(|data| data.into_scanlines())?;
+        dbg!(scanlines.len());
+
+        Ok(scanlines
+            .into_iter()
+            .fold(Vec::new(), |mut raw_bytes, scanline| {
+                let row_start = raw_bytes.len();
+                let filter_type = scanline.0;
+                let data = scanline.1;
+                match filter_type {
+                    FilterType::None => data.into_iter().for_each(|b| raw_bytes.push(b)),
+                    FilterType::Sub => {
+                        // Raw(x) = Sub(x) + Raw(x-bpp)
+                        // bpp = bytes per pixel (rounded up)
+                        // for all x < 0 assume Raw(x) = 0
+                        // x = 0..scanline.len()-1
+
+                        data.iter().enumerate().for_each(|(x, sub_x)| {
+                            let raw_x_minus_bpp = if x < bpp {
+                                0
+                            } else {
+                                // NOTE: We would like to use `data[x - bpp]` here, but that would
+                                //       require another borrow as we would have to mutate this
+                                //       array as well because we need the raw value, not the sub x
+                                //       value that is currently inside the data
+                                raw_bytes[x + row_start - bpp]
+                            };
+                            let raw_x = (*sub_x as usize + raw_x_minus_bpp as usize) % 256 as usize;
+                            raw_bytes.push(raw_x as u8);
+                        })
+                    }
+                    _ => todo!("Unsupported filter type: {filter_type:?}"),
+                };
+
+                raw_bytes
+            }))
     }
 }
 
