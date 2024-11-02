@@ -351,19 +351,25 @@ impl fmt::Display for IhdrChunkData {
 #[derive(PartialEq, Debug)]
 pub struct IdatChunkData {
     scanlines: Vec<(FilterType, Vec<u8>)>,
+    pixels: Vec<u8>,
 }
 
 impl IdatChunkData {
-    pub fn scanlines(&self) -> &Vec<(FilterType, Vec<u8>)> {
-        &self.scanlines
-    }
-    pub fn pixels(&self) -> Vec<u8> {
-        self.scanlines
+    pub fn new(scanlines: Vec<(FilterType, Vec<u8>)>) -> Self {
+        let pixels = scanlines
             .iter()
             .map(|(_, pixels)| pixels)
             .flatten()
             .map(|x| *x)
-            .collect::<Vec<u8>>()
+            .collect::<Vec<u8>>();
+
+        Self { scanlines, pixels }
+    }
+    pub fn scanlines(&self) -> &Vec<(FilterType, Vec<u8>)> {
+        &self.scanlines
+    }
+    pub fn pixels(&self) -> &Vec<u8> {
+        &self.pixels
     }
 }
 
@@ -393,8 +399,10 @@ impl TryFrom<u8> for FilterType {
 impl TryFrom<(IhdrChunkData, Vec<u8>)> for IdatChunkData {
     type Error = String;
     fn try_from(value: (IhdrChunkData, Vec<u8>)) -> Result<Self, Self::Error> {
+        // FIXME: This implementation only allows for a single IDAT chunk.
+
         // Decode the raw data using zlib (DEFLATE)
-        // NOTE: The only valid de/compression for PNG is DEFLATE, however it's open
+        // FIXME: The only valid de/compression for PNG is DEFLATE, however it's open
         //       to extension, so we should definitely check the compression type here
         let raw_data = value.1.as_slice();
         let mut decoder = zlib::Decoder::new(raw_data);
@@ -424,8 +432,9 @@ impl TryFrom<(IhdrChunkData, Vec<u8>)> for IdatChunkData {
             .chunks_exact(pixels_per_scanline)
             .map(|chunk| (FilterType::try_from(chunk[0]).unwrap(), chunk[1..].to_vec()))
             .collect::<Vec<(FilterType, Vec<u8>)>>();
+        // FIXME: Check CRC
         let adler_crc = checksum::adler::State32::new();
-        Ok(Self { scanlines })
+        Ok(Self::new(scanlines))
     }
 }
 
@@ -504,10 +513,8 @@ impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
                 format!("Failed to parse chunk type: {e}"),
             )
         })?;
+
         let mut chunk_data_raw: Vec<u8> = Vec::with_capacity(length as usize);
-
-        println!("Reading {length} bytes (chunk data)");
-
         for _ in 0..length {
             chunk_data_raw.push(self.inner.next().ok_or_else(|| {
                 io::Error::new(
@@ -544,8 +551,6 @@ impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
         if N == 0 {
             return Ok(buf);
         }
-
-        println!("Reading {N} bytes");
 
         for b in &mut buf {
             *b = self
