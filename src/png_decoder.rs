@@ -1,5 +1,5 @@
-use compress::checksum;
 use compress::zlib;
+use core::str;
 use std::fmt;
 use std::io;
 use std::io::Read;
@@ -7,6 +7,10 @@ use std::usize;
 
 const PNG_SIGNATURE_LENGTH: usize = 8;
 const PNG_SIGNATURE: [u8; PNG_SIGNATURE_LENGTH] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+const CHUNK_TYPE_LENGTH: usize = 4;
+const IHDR: [u8; CHUNK_TYPE_LENGTH] = [b'I', b'H', b'D', b'R'];
+const IDAT: [u8; CHUNK_TYPE_LENGTH] = [b'I', b'D', b'A', b'T'];
+const IEND: [u8; CHUNK_TYPE_LENGTH] = [b'I', b'E', b'N', b'D'];
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum ChunkData {
@@ -467,11 +471,24 @@ impl fmt::Display for Chunk {
 
 struct PngIterator<I: ExactSizeIterator<Item = u8>> {
     inner: I,
+    crc_table: [u32; 256],
 }
 
 impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
     fn new(inner: I) -> Self {
-        PngIterator { inner }
+        let mut crc_table: [u32; 256] = [0; 256];
+        for i in 0..256usize {
+            let mut c = i;
+            for _ in 0..8 {
+                if (c & 1) != 0 {
+                    c = 0xedb88320 ^ (c >> 1);
+                } else {
+                    c = c >> 1;
+                }
+            }
+            crc_table[i] = c as u32;
+        }
+        PngIterator { inner, crc_table }
     }
 
     fn validate_png_signature(&mut self) -> io::Result<()> {
@@ -492,14 +509,9 @@ impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
     /// - chunk data (length bytes)
     /// - CRC (4 bytes)
     fn parse_chunk(&mut self) -> io::Result<Option<Chunk>> {
+        // Read the chunk
         let length = u32::from_be_bytes(self.read_bytes()?);
-        let chunk_type = String::from_utf8(self.read_bytes::<4>()?.to_vec()).map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Failed to parse chunk type: {e}"),
-            )
-        })?;
-
+        let chunk_type = self.read_bytes::<4>()?;
         let mut chunk_data_raw: Vec<u8> = Vec::with_capacity(length as usize);
         for _ in 0..length {
             chunk_data_raw.push(self.inner.next().ok_or_else(|| {
@@ -509,21 +521,41 @@ impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
                 )
             })?);
         }
-        let _crc: [u8; 4] = self.read_bytes()?;
+        let crc_got = u32::from_be_bytes(self.read_bytes()?);
 
-        let chunk_data = match chunk_type.as_str() {
-            "IHDR" => ChunkData::Ihdr(IhdrChunkData::try_from(chunk_data_raw).unwrap()),
-            "IDAT" => ChunkData::Idat(chunk_data_raw),
-            "IEND" => ChunkData::Iend,
+        let crc_expected = self.crc(chunk_type, &chunk_data_raw);
+        if crc_expected != crc_got {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("CRC failed - expected (computed): {crc_expected}, got (inside chunk): {crc_got}"),
+            ));
+        }
+
+        // Parse the chunk data according to the chunk type
+        let chunk_data = match chunk_type {
+            IHDR => ChunkData::Ihdr(IhdrChunkData::try_from(chunk_data_raw).unwrap()),
+            IDAT => ChunkData::Idat(chunk_data_raw),
+            IEND => ChunkData::Iend,
             _ => {
-                println!("Skipping header: {chunk_type}");
+                println!("Skipping header: {}", str::from_utf8(&chunk_type).unwrap());
                 return Ok(None);
             }
         };
 
-        // FIXME: Check CRC
-        let _adler_crc = checksum::adler::State32::new();
         Ok(Some(Chunk::new(chunk_data)))
+    }
+    fn update_crc(&self, mut crc: u32, chunk_type: [u8; 4], chunk_data_raw: &[u8]) -> u32 {
+        chunk_type
+            .chain(chunk_data_raw)
+            .bytes()
+            .map(|b| b.unwrap())
+            .for_each(|b| crc = self.crc_table[((crc ^ b as u32) & 0xff) as usize] ^ (crc >> 8u32));
+
+        crc
+    }
+
+    fn crc(&self, chunk_type: [u8; 4], chunk_data_raw: &[u8]) -> u32 {
+        self.update_crc(0xffffffff, chunk_type, chunk_data_raw) ^ 0xffffffff
     }
 
     // FIXME: This is a dupliate of the generic `read_bytes(Iter)` function.
