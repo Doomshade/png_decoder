@@ -477,16 +477,16 @@ struct PngIterator<I: ExactSizeIterator<Item = u8>> {
 impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
     fn new(inner: I) -> Self {
         let mut crc_table: [u32; 256] = [0; 256];
-        for i in 0..256usize {
+        for (i, item) in crc_table.iter_mut().enumerate() {
             let mut c = i;
             for _ in 0..8 {
                 if (c & 1) != 0 {
                     c = 0xedb88320 ^ (c >> 1);
                 } else {
-                    c = c >> 1;
+                    c >>= 1;
                 }
             }
-            crc_table[i] = c as u32;
+            *item = c as u32;
         }
         PngIterator { inner, crc_table }
     }
@@ -584,8 +584,8 @@ fn read_bytes<'a, const N: usize>(
         return Some(*buf);
     }
 
-    for i in 0..N {
-        buf[i] = *iter.next()?;
+    for b in buf.iter_mut().take(N) {
+        *b = *iter.next()?;
     }
 
     Some(*buf)
@@ -601,7 +601,7 @@ impl PngFile {
         let ihdr_chunk = self.chunks.first().unwrap();
         let data = ihdr_chunk.data();
         match data {
-            ChunkData::Ihdr(ihdr_data) => &ihdr_data,
+            ChunkData::Ihdr(ihdr_data) => ihdr_data,
             _ => unreachable!(),
         }
     }
@@ -651,7 +651,7 @@ impl PngFile {
                                 //       value that is currently inside the data
                                 raw_bytes[x + row_start - bpp]
                             };
-                            let raw_x = (*sub_x as usize + raw_x_minus_bpp as usize) % 256 as usize;
+                            let raw_x = (*sub_x as usize + raw_x_minus_bpp as usize) % 256_usize;
                             raw_bytes.push(raw_x as u8);
                         })
                     }
