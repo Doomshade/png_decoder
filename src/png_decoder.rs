@@ -1,8 +1,11 @@
 use compress::zlib;
 use core::str;
 use std::fmt;
+use std::fs;
 use std::io;
 use std::io::Read;
+use std::isize;
+use std::path;
 
 const PNG_SIGNATURE_LENGTH: usize = 8;
 const PNG_SIGNATURE: [u8; PNG_SIGNATURE_LENGTH] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
@@ -635,27 +638,105 @@ impl PngFile {
                 let row_start = raw_bytes.len();
                 let filter_type = scanline.0;
                 let data = scanline.1;
+
+                fn raw(x: isize, raw_bytes: &[u8], row_start: usize) -> u8 {
+                    if x < 0 {
+                        0
+                    } else {
+                        raw_bytes[x as usize + row_start]
+                    }
+                }
+
+                fn sub_reverse(
+                    x: usize,
+                    sub: u8,
+                    bpp: usize,
+                    raw_bytes: &[u8],
+                    row_start: usize,
+                ) -> u8 {
+                    // Raw(x) = Sub(x) + Raw(x-bpp)
+                    // bpp = bytes per pixel (rounded up)
+                    // for all x < 0 assume Raw(x) = 0
+                    // x = 0..scanline.len()-1
+                    ((sub as usize + raw(x as isize - bpp as isize, raw_bytes, row_start) as usize)
+                        % 256_usize) as u8
+                }
+
+                fn prior(x: isize, row_width: usize, raw_bytes: &[u8], row_start: usize) -> u8 {
+                    if x < 0 || row_start == 0 {
+                        0
+                    } else {
+                        raw_bytes[(x - row_width as isize + row_start as isize) as usize]
+                    }
+                }
+
+                fn up_reverse(
+                    x: usize,
+                    up: u8,
+                    raw_bytes: &[u8],
+                    row_start: usize,
+                    row_width: usize,
+                ) -> u8 {
+                    // Raw(x) = Up(x) + Prior(x)
+                    // On the first scanline of an image (or of a pass of an interlaced image), assume Prior(x) = 0 for all x.
+                    // x = 0..scanline.len()-1
+                    ((up as usize + prior(x as isize, row_width, raw_bytes, row_start) as usize)
+                        % 256_usize) as u8
+                }
+
+                fn paeth_predictor(a: isize, b: isize, c: isize) -> u8 {
+                    let p = a + b - c;
+                    let pa = (p - a).abs();
+                    let pb = (p - b).abs();
+                    let pc = (p - c).abs();
+
+                    let res = if pa <= pb && pa <= pc {
+                        a
+                    } else if pb <= pc {
+                        b
+                    } else {
+                        c
+                    };
+                    let res = res % 256_isize;
+                    res as u8
+                }
+
+                fn paeth_rev(
+                    paeth: u8,
+                    x: usize,
+                    bpp: usize,
+                    raw_bytes: &[u8],
+                    row_start: usize,
+                    row_width: usize,
+                ) -> u8 {
+                    ((paeth as usize
+                        + paeth_predictor(
+                            raw(x as isize - bpp as isize, raw_bytes, row_start) as isize,
+                            prior(x as isize, row_width, raw_bytes, row_start) as isize,
+                            prior(x as isize - bpp as isize, row_width, raw_bytes, row_start)
+                                as isize,
+                        ) as usize)
+                        % 256_usize) as u8
+                }
                 match filter_type {
                     FilterType::None => data.into_iter().for_each(|b| raw_bytes.push(b)),
-                    FilterType::Sub => {
-                        // Raw(x) = Sub(x) + Raw(x-bpp)
-                        // bpp = bytes per pixel (rounded up)
-                        // for all x < 0 assume Raw(x) = 0
-                        // x = 0..scanline.len()-1
-
-                        data.iter().enumerate().for_each(|(x, sub_x)| {
-                            let raw_x_minus_bpp = if x < bpp {
-                                0
-                            } else {
-                                // NOTE: We would like to use `data[x - bpp]` here, but that would
-                                //       require another borrow as we would have to mutate this
-                                //       array as well because we need the raw value, not the sub x
-                                //       value that is currently inside the data
-                                raw_bytes[x + row_start - bpp]
-                            };
-                            let raw_x = (*sub_x as usize + raw_x_minus_bpp as usize) % 256_usize;
-                            raw_bytes.push(raw_x as u8);
-                        })
+                    FilterType::Sub => data.iter().enumerate().for_each(|(x, sub)| {
+                        raw_bytes.push(sub_reverse(x, *sub, bpp, &raw_bytes, row_start));
+                    }),
+                    FilterType::Up => data.iter().enumerate().for_each(|(x, up)| {
+                        raw_bytes.push(up_reverse(x, *up, &raw_bytes, row_start, data.len()));
+                    }),
+                    FilterType::Paeth => {
+                        data.iter().enumerate().for_each(|(x, paeth)| {
+                            raw_bytes.push(paeth_rev(
+                                *paeth,
+                                x,
+                                bpp,
+                                &raw_bytes,
+                                row_start,
+                                data.len(),
+                            ));
+                        });
                     }
                     _ => todo!("Unsupported filter type: {filter_type:?}"),
                 };
@@ -676,8 +757,13 @@ impl fmt::Display for PngFile {
     }
 }
 
+pub fn parse_png(file_path: &path::Path) -> Result<PngFile, io::Error> {
+    info!("Parsing {file_path:?}");
+    parse_png_content(fs::read(file_path)?)
+}
+
 /// Parses the PNG
-pub fn parse_png(content: Vec<u8>) -> Result<PngFile, io::Error> {
+pub fn parse_png_content(content: Vec<u8>) -> Result<PngFile, io::Error> {
     let mut png_iter = PngIterator::new(content.into_iter());
     png_iter.validate_png_signature()?;
 
