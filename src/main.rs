@@ -10,12 +10,9 @@ pub mod png_decoder;
 
 #[show_image::main]
 fn main() {
-    match SimpleLogger::init(LevelFilter::Trace, Config::default()) {
-        Ok(()) => {}
-        Err(e) => {
-            println!("Failed to initialize looger. Reason: {e}");
-            return;
-        }
+    if let Err(e) = SimpleLogger::init(LevelFilter::Trace, Config::default()) {
+        println!("Failed to initialize logger. Reason: {e}");
+        return;
     };
 
     let file = match env::args().nth(1) {
