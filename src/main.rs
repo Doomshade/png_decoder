@@ -86,7 +86,7 @@ fn main() {
     // such as the width, height, bit depth, color type, ...
     // We pass this information to the image library.
     let ihdr = png_file.ihdr();
-    debug!("Image info: {ihdr}");
+    info!("Image info: {ihdr}");
 
     // FIXME: We can *technically* support bit depth of 1 as the image library supports grayscale
     if ihdr.bit_depth() != &BitDepth::_8 {
