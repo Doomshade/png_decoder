@@ -1,5 +1,6 @@
 use std::{env, fs, path};
 
+use log::SetLoggerError;
 use png_decoder::{BitDepth, ColorType};
 use show_image::{Alpha, PixelFormat};
 #[macro_use]
@@ -10,29 +11,7 @@ pub mod png_decoder;
 
 #[show_image::main]
 fn main() {
-    const LOG_FILE: &str = "png_decoder.log";
-    let log_file = fs::File::create(LOG_FILE).map_or_else(
-        |e| {
-            warn!("Failed to create file. Reason: {e}");
-            None
-        },
-        Some,
-    );
-    let mut loggers: Vec<Box<dyn SharedLogger>> = vec![TermLogger::new(
-        LevelFilter::Warn,
-        Config::default(),
-        TerminalMode::Mixed,
-        ColorChoice::Auto,
-    )];
-
-    if let Some(file) = log_file {
-        loggers.push(WriteLogger::new(
-            LevelFilter::Debug,
-            Config::default(),
-            file,
-        ));
-    }
-    if let Err(e) = CombinedLogger::init(loggers) {
+    if let Err(e) = init_logger() {
         println!("Failed to initialize logger. Reason: {e}");
         return;
     };
@@ -63,16 +42,7 @@ fn main() {
         }
     };
 
-    info!("Parsing {file_name}");
-
-    let file_content = match fs::read(path) {
-        Ok(file_content) => file_content,
-        Err(e) => {
-            error!("Failed to read the contents of file {file}: {e}");
-            return;
-        }
-    };
-    let png_file = match png_decoder::parse_png(file_content) {
+    let png_file = match png_decoder::parse_png(path) {
         Ok(png_file) => png_file,
         Err(e) => {
             error!("Failed to parse PNG file {file}: {e}");
@@ -157,4 +127,30 @@ fn main() {
             }
         }
     }
+}
+
+fn init_logger() -> Result<(), SetLoggerError> {
+    const LOG_FILE: &str = "png_decoder.log";
+    let log_file = fs::File::create(LOG_FILE).map_or_else(
+        |e| {
+            warn!("Failed to create file. Reason: {e}");
+            None
+        },
+        Some,
+    );
+    let mut loggers: Vec<Box<dyn SharedLogger>> = vec![TermLogger::new(
+        LevelFilter::Warn,
+        Config::default(),
+        TerminalMode::Mixed,
+        ColorChoice::Auto,
+    )];
+
+    if let Some(file) = log_file {
+        loggers.push(WriteLogger::new(
+            LevelFilter::Debug,
+            Config::default(),
+            file,
+        ));
+    }
+    CombinedLogger::init(loggers)
 }
