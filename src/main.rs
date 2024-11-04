@@ -90,7 +90,8 @@ fn main() {
 
     // FIXME: We can *technically* support bit depth of 1 as the image library supports grayscale
     if ihdr.bit_depth() != &BitDepth::_8 {
-        panic!("Bit depth not supported: {}", ihdr.bit_depth());
+        error!("Bit depth not supported: {}", ihdr.bit_depth());
+        return;
     }
 
     // Create an image view for the image library.
