@@ -10,16 +10,16 @@ pub mod png_decoder;
 
 #[show_image::main]
 fn main() {
-    const LOG_FILE: &'static str = "png_decoder.log";
+    const LOG_FILE: &str = "png_decoder.log";
     let log_file = fs::File::create(LOG_FILE).map_or_else(
         |e| {
             warn!("Failed to create file. Reason: {e}");
             None
         },
-        |v| Some(v),
+        Some,
     );
     let mut loggers: Vec<Box<dyn SharedLogger>> = vec![TermLogger::new(
-        LevelFilter::Info,
+        LevelFilter::Warn,
         Config::default(),
         TerminalMode::Mixed,
         ColorChoice::Auto,
