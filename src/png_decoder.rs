@@ -536,7 +536,10 @@ impl<I: ExactSizeIterator<Item = u8>> PngIterator<I> {
             IDAT => ChunkData::Idat(chunk_data_raw),
             IEND => ChunkData::Iend,
             _ => {
-                println!("Skipping header: {}", str::from_utf8(&chunk_type).unwrap());
+                warn!(
+                    "Skipping PNG chunk: {}",
+                    str::from_utf8(&chunk_type).unwrap_or("<non-utf8-data>")
+                );
                 return Ok(None);
             }
         };
@@ -624,7 +627,7 @@ impl PngFile {
         let bpp = ihdr_chunk.bpp() as usize;
         let scanlines = IdatCombinedChunkData::try_from((&ihdr_chunk, encoded_pixels))
             .map(|data| data.into_scanlines())?;
-        dbg!(scanlines.len());
+        debug!("Total scanlines: {}", scanlines.len());
 
         Ok(scanlines
             .into_iter()
