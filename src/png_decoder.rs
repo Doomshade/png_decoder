@@ -3,7 +3,6 @@ use core::str;
 use std::fmt;
 use std::io;
 use std::io::Read;
-use std::usize;
 
 const PNG_SIGNATURE_LENGTH: usize = 8;
 const PNG_SIGNATURE: [u8; PNG_SIGNATURE_LENGTH] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
@@ -598,11 +597,11 @@ pub struct PngFile {
 
 impl PngFile {
     pub fn ihdr(&self) -> &IhdrChunkData {
-        let ihdr_chunk = self.chunks.first().unwrap();
+        let ihdr_chunk = self.chunks.first().expect("IHDR (PNG header) is not present, although the file was parsed just fine (this is wrong!)");
         let data = ihdr_chunk.data();
         match data {
             ChunkData::Ihdr(ihdr_data) => ihdr_data,
-            _ => unreachable!(),
+            _ => panic!("The first chunk MUST be the IHDR chunk. The parses should have thrown an error! This is an invalid PNG.")
         }
     }
     pub fn try_into_pixels(self) -> Result<Vec<u8>, String> {

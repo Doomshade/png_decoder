@@ -5,4 +5,6 @@ edition = "2021"
 
 [dependencies]
 compress = "0.2.1"
+log = "0.4.22"
 show-image = "0.14.0"
+simplelog = "0.12.2"
