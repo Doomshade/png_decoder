@@ -10,7 +10,29 @@ pub mod png_decoder;
 
 #[show_image::main]
 fn main() {
-    if let Err(e) = SimpleLogger::init(LevelFilter::Trace, Config::default()) {
+    const LOG_FILE: &'static str = "png_decoder.log";
+    let log_file = fs::File::create(LOG_FILE).map_or_else(
+        |e| {
+            warn!("Failed to create file. Reason: {e}");
+            None
+        },
+        |v| Some(v),
+    );
+    let mut loggers: Vec<Box<dyn SharedLogger>> = vec![TermLogger::new(
+        LevelFilter::Info,
+        Config::default(),
+        TerminalMode::Mixed,
+        ColorChoice::Auto,
+    )];
+
+    if let Some(file) = log_file {
+        loggers.push(WriteLogger::new(
+            LevelFilter::Debug,
+            Config::default(),
+            file,
+        ));
+    }
+    if let Err(e) = CombinedLogger::init(loggers) {
         println!("Failed to initialize logger. Reason: {e}");
         return;
     };
