@@ -757,6 +757,26 @@ impl fmt::Display for PngFile {
     }
 }
 
+pub fn output_ppm<T: io::Write>(
+    width: usize,
+    height: usize,
+    bytes: &[u8],
+    out: &mut T,
+) -> Result<(), io::Error> {
+    // P6
+    // <width> <height>
+    // <value per color> (255 always)
+    writeln!(out, "P3")?;
+    writeln!(out, "{} {}", width, height)?;
+    writeln!(out, "255")?;
+    info!("Bytes len: {}", bytes.len());
+    // FIXME: Don't use unwrap
+    bytes
+        .chunks_exact(4)
+        .for_each(|b| writeln!(out, "{} {} {}", b[0], b[1], b[2]).unwrap());
+    Ok(())
+}
+
 pub fn parse_png(file_path: &path::Path) -> Result<PngFile, io::Error> {
     info!("Parsing {file_path:?}");
     parse_png_content(fs::read(file_path)?)

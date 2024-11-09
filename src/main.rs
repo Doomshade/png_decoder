@@ -86,6 +86,24 @@ fn main() {
         }
     };
     debug!("Raw data length: {}", pixels.len());
+
+    let ppm_file_name = format!("{file_name}.ppm");
+    info!("Outputting into PPM file {ppm_file_name}");
+    match fs::File::create_new(&ppm_file_name) {
+        Ok(mut file) => {
+            match png_decoder::output_ppm(width as usize, height as usize, &pixels, &mut file) {
+                Ok(_) => {
+                    info!("PNG file outputted to {ppm_file_name}");
+                }
+                Err(e) => {
+                    warn!("Failed to output ppm file {ppm_file_name}: {e}");
+                }
+            }
+        }
+        Err(e) => {
+            warn!("Failed to create output PPM file {ppm_file_name}: {e}");
+        }
+    };
     let image = show_image::ImageView::new(
         show_image::ImageInfo::new(pixel_format, width, height),
         &pixels,
